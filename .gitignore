@@ -1,0 +1,12 @@
+.tools/
+.gradle/
+.gradle-home/
+.gradle-native/
+.android/
+.kotlin/
+**/build/
+local.properties
+*.iml
+.idea/
+*.keystore
+*.jks
