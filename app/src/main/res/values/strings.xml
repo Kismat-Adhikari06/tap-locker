@@ -1,0 +1,3 @@
+<resources>
+    <string name="accessibility_service_description">Returns to Home when a selected app opens while TapLock is locked.</string>
+</resources>
