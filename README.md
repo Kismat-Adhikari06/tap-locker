@@ -1,36 +1,34 @@
 # TapLock
 
-TapLock is a local Android MVP. It registers a card UID, then uses that same card to start or stop focus mode. It lists launchable apps installed on the phone so the user can choose any of them. Focus sessions can be set to 30, 60 or 120 minutes; they automatically expire, and the registered NFC card can end a session early. When focus mode is on, its Accessibility Service returns selected apps to Home.
+TapLock is a local Android focus planner and app blocker. The **Today** tab has a week strip and a daily timeline. Add a plan with a time, title, and short note; the most recent plan for today is highlighted in blue. Tap a plan to edit or delete it. Plans are stored locally on the phone.
+
+The **Focus** tab keeps the app blocker: choose installed apps, start a 30, 60, or 120 minute session, and use an NFC card to register or toggle focus mode. During an active session, the Accessibility Service shows a gray TapLock screen over a selected app and returns the phone to Home. Android still allows Accessibility to be disabled, so this is a focus aid rather than a tamper-proof blocker.
 
 ## Build on Windows without Android Studio
 
-Java 17 is already present on the inspected machine. The Android SDK, ADB and Gradle are not installed there, and its current network policy could not reach Google's download server. When network access is available, open PowerShell in this project directory and run:
+Java 17, Android command-line tools, Android SDK Platform 35, platform-tools, and Gradle 8.9 have been set up for this workspace. To rebuild, open PowerShell in the project folder and run:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\setup-windows.ps1
 ```
 
-The script downloads the official Android command line tools (and checks their published SHA-256), SDK Platform 35, platform-tools and Gradle 8.9 into the project’s `.tools` folder, then builds the debug APK. SDK and Gradle downloads are large and require internet access. Accept the Android SDK licenses when prompted. Gradle also needs internet access to download Android and Compose dependencies on the first build.
+The script builds the debug APK at `app\build\outputs\apk\debug\app-debug.apk`. Internet access is needed for dependency downloads the first time. Accept Android SDK licenses if prompted.
 
-APK output: `app\build\outputs\apk\debug\app-debug.apk`.
+## Install on a phone
 
-## Install and phone setup
-
-After a successful build, connect the phone with USB debugging enabled and run:
+Connect the phone with USB debugging enabled. In PowerShell, run:
 
 ```powershell
 .\.tools\android-sdk\platform-tools\adb.exe devices -l
 .\.tools\android-sdk\platform-tools\adb.exe install -r .\app\build\outputs\apk\debug\app-debug.apk
 ```
 
-On the phone, open TapLock → Settings → **Open Accessibility settings**, then enable **TapLock app blocking**. Android may show a confirmation screen. Return to TapLock, choose the apps and session length, and tap **Start session** or scan an NFC card. Scan an unregistered card once to register it; later scans toggle focus mode. NFC can also open TapLock when a supported NFC tag is scanned. A timed session ends automatically; scanning the registered card or pressing **Unlock now** ends it early.
+On the phone, enable **TapLock app blocking** in Android Accessibility settings. Then select apps and a session length in the **Focus** tab. NFC requires a phone with NFC hardware; TapLock reads a card UID but does not write to the card. NFC scans work when TapLock is open, and supported tags may open the app from the background.
 
-## MVP behavior and limits
+## Limits
 
-- All installed launchable apps are listed. Android's broad package visibility is needed for this sideloaded MVP; Google Play distribution would require reviewing its package visibility policy.
-- NFC card UID is stored locally. The app never writes to the card.
-- The accessibility service places a gray TapLock screen over a selected app as it opens, then sends the phone to Home. Android may delay or restrict Accessibility behavior, and the user can disable the service or reopen an app. This is a focus aid, not a tamper-proof blocker. TapLock cannot gray the app icon in the phone launcher or suspend another app at the operating-system level without managed-device privileges.
-- A device without NFC can still open the UI, but cannot register or scan a card.
-- NFC detection and blocking must be verified on the real phone. Some phone models/regions do not include NFC.
-- The app itself was not built or installed in the current environment because Android SDK, Gradle, ADB and outbound download access were unavailable.
+- The planner is a simple local daily schedule. It does not yet create notifications or automatically start a focus session when a plan begins.
+- App blocking depends on Android Accessibility and may be bypassed by disabling the service or reopening an app.
+- The app cannot gray an app's launcher icon or suspend it at the OS level without managed-device privileges.
+- All installed launchable apps are listed. Broad package visibility is suitable for this sideloaded MVP; publishing through Google Play would require reviewing its package visibility policy.

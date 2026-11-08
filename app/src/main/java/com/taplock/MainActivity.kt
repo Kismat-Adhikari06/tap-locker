@@ -1,5 +1,6 @@
 package com.taplock
 
+import android.app.TimePickerDialog
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.content.Intent
@@ -8,25 +9,35 @@ import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.os.Bundle
 import android.provider.Settings
+import android.text.format.DateFormat
 import android.view.accessibility.AccessibilityManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Nfc
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -34,6 +45,13 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.time.DayOfWeek
+import java.time.LocalDate
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
+import java.time.format.TextStyle
+import java.util.Locale
+import java.util.UUID
 
 class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
     private val store by lazy { LockStore(applicationContext) }
@@ -50,7 +68,7 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         accessibilityEnabled = isBlockingServiceEnabled()
         handleNfcIntent(intent)
         setContent {
-            TapLockScreen(this, store, nfcAdapter != null, accessibilityEnabled, { scanMessage }, { openAccessibilitySettings() })
+            TapLockApp(this, store, nfcAdapter != null, accessibilityEnabled, { scanMessage }, { openAccessibilitySettings() })
         }
     }
 
@@ -146,10 +164,292 @@ private object TapColors {
     val warning = Color(0xFFFFF0E9)
     val warningInk = Color(0xFF8D3826)
     val border = Color(0xFFE4E9E4)
+    val timelineBlue = Color(0xFF5598EF)
+    val eventPale = Color(0xFFF1F3F8)
 }
 
 @Composable
-private fun TapLockScreen(
+private fun TapLockApp(
+    context: ComponentActivity,
+    store: LockStore,
+    hasNfc: Boolean,
+    accessibilityEnabled: Boolean,
+    scanMessage: () -> String,
+    openAccessibility: () -> Unit
+) {
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    var selectedDate by rememberSaveable { mutableLongStateOf(LocalDate.now().toEpochDay()) }
+    var showEventEditor by remember { mutableStateOf(false) }
+    var editingEvent by remember { mutableStateOf<PlannerEvent?>(null) }
+    var currentMinute by remember { mutableIntStateOf(LocalTime.now().let { it.hour * 60 + it.minute }) }
+    val state by store.state.collectAsState(initial = LockState())
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            val time = LocalTime.now()
+            currentMinute = time.hour * 60 + time.minute
+            delay(20_000)
+        }
+    }
+
+    Surface(Modifier.fillMaxSize(), color = TapColors.background) {
+        Column(Modifier.fillMaxSize()) {
+            Box(Modifier.weight(1f)) {
+                if (selectedTab == 0) {
+                    PlannerScreen(
+                        state = state,
+                        selectedDateEpochDay = selectedDate,
+                        currentMinute = currentMinute,
+                        onDateSelected = { selectedDate = it },
+                        onWeekChange = { days -> selectedDate += days.toLong() },
+                        onAddEvent = { editingEvent = null; showEventEditor = true },
+                        onEditEvent = { editingEvent = it; showEventEditor = true }
+                    )
+                } else {
+                    FocusScreen(context, store, hasNfc, accessibilityEnabled, scanMessage, openAccessibility)
+                }
+            }
+            NavigationBar(containerColor = Color.White, tonalElevation = 4.dp) {
+                NavigationBarItem(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    icon = { Icon(Icons.Default.DateRange, contentDescription = null) },
+                    label = { Text("Today") },
+                    colors = NavigationBarItemDefaults.colors(selectedIconColor = TapColors.timelineBlue, selectedTextColor = TapColors.timelineBlue, indicatorColor = TapColors.paleGreen)
+                )
+                Box(Modifier.weight(1f).height(64.dp), contentAlignment = Alignment.Center) {
+                    FloatingActionButton(
+                        onClick = { selectedTab = 0; editingEvent = null; showEventEditor = true },
+                        modifier = Modifier.size(54.dp),
+                        shape = RoundedCornerShape(18.dp),
+                        containerColor = TapColors.timelineBlue,
+                        contentColor = Color.White
+                    ) { Icon(Icons.Default.Add, contentDescription = "Add plan", modifier = Modifier.size(29.dp)) }
+                }
+                NavigationBarItem(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    icon = { Icon(Icons.Default.Timer, contentDescription = null) },
+                    label = { Text("Focus") },
+                    colors = NavigationBarItemDefaults.colors(selectedIconColor = TapColors.timelineBlue, selectedTextColor = TapColors.timelineBlue, indicatorColor = TapColors.paleGreen)
+                )
+            }
+        }
+    }
+
+    if (showEventEditor) {
+        PlannerEventDialog(
+            context = context,
+            dateEpochDay = selectedDate,
+            event = editingEvent,
+            onDismiss = { showEventEditor = false },
+            onSave = { event -> context.lifecycleScope.launch { store.saveEvent(event) }; showEventEditor = false },
+            onDelete = { event -> context.lifecycleScope.launch { store.deleteEvent(event.id) }; showEventEditor = false }
+        )
+    }
+}
+
+@Composable
+private fun PlannerScreen(
+    state: LockState,
+    selectedDateEpochDay: Long,
+    currentMinute: Int,
+    onDateSelected: (Long) -> Unit,
+    onWeekChange: (Int) -> Unit,
+    onAddEvent: () -> Unit,
+    onEditEvent: (PlannerEvent) -> Unit
+) {
+    val selectedDate = LocalDate.ofEpochDay(selectedDateEpochDay)
+    val today = LocalDate.now()
+    val firstDay = selectedDate.with(DayOfWeek.MONDAY)
+    val week = (0..6).map { firstDay.plusDays(it.toLong()) }
+    val events = state.events.filter { it.dateEpochDay == selectedDateEpochDay }.sortedBy { it.minuteOfDay }
+    val activeEventId = if (selectedDate == today) events.lastOrNull { it.minuteOfDay <= currentMinute }?.id else null
+    val monthLabel = selectedDate.format(DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault()))
+    val dayLabel = if (selectedDate == today) "Today" else selectedDate.dayOfWeek.getDisplayName(TextStyle.FULL, Locale.getDefault())
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 22.dp, top = 20.dp, end = 22.dp, bottom = 22.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp)
+    ) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                Column {
+                    Text(monthLabel, color = TapColors.muted, fontSize = 14.sp)
+                    Text(dayLabel, color = Color(0xFF101715), fontSize = 34.sp, fontWeight = FontWeight.Bold)
+                }
+                Row {
+                    IconButton(onClick = { onWeekChange(-7) }) { Icon(Icons.Default.ChevronLeft, "Previous week", tint = TapColors.muted) }
+                    IconButton(onClick = { onWeekChange(7) }) { Icon(Icons.Default.ChevronRight, "Next week", tint = TapColors.muted) }
+                }
+            }
+        }
+        item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                week.forEach { day ->
+                    val isSelected = day == selectedDate
+                    Column(
+                        modifier = Modifier.weight(1f).clickable { onDateSelected(day.toEpochDay()) }.padding(vertical = 3.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(day.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault()), color = if (isSelected) TapColors.timelineBlue else TapColors.muted, fontSize = 12.sp)
+                        Spacer(Modifier.height(7.dp))
+                        Box(
+                            Modifier.size(34.dp).background(if (isSelected) TapColors.timelineBlue else Color.Transparent, CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(day.dayOfMonth.toString(), color = if (isSelected) Color.White else TapColors.ink, fontSize = 14.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium)
+                        }
+                        Box(Modifier.padding(top = 3.dp).size(4.dp).background(if (day == today) TapColors.timelineBlue else Color.Transparent, CircleShape))
+                    }
+                }
+            }
+        }
+        item {
+            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                Column {
+                    Text("Your day", color = TapColors.ink, fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Tap a plan to edit it", color = TapColors.muted, fontSize = 12.sp)
+                }
+                if (events.isNotEmpty()) Text("${events.size} plans", color = TapColors.muted, fontSize = 12.sp)
+            }
+        }
+        if (events.isEmpty()) item {
+            Card(
+                modifier = Modifier.fillMaxWidth().clickable(onClick = onAddEvent),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                shape = RoundedCornerShape(22.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+            ) {
+                Column(Modifier.fillMaxWidth().padding(vertical = 30.dp, horizontal = 22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(Modifier.size(48.dp).background(TapColors.paleGreen, CircleShape), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Default.Add, null, tint = TapColors.timelineBlue)
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Text("Nothing planned yet", color = TapColors.ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Add a time and a few words to shape your day.", color = TapColors.muted, fontSize = 13.sp, textAlign = TextAlign.Center)
+                }
+            }
+        }
+        items(events, key = { it.id }) { event ->
+            val highlighted = event.id == activeEventId
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                Column(Modifier.width(34.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(
+                        Modifier.padding(top = 17.dp).size(if (highlighted) 18.dp else 14.dp)
+                            .background(if (highlighted) TapColors.timelineBlue else Color.White, CircleShape)
+                            .border(if (highlighted) 3.dp else 2.dp, TapColors.timelineBlue, CircleShape)
+                    )
+                    if (event != events.last()) Box(Modifier.padding(top = 4.dp).width(2.dp).height(61.dp).background(Color(0xFFB7D5FB)))
+                }
+                PlannerEventCard(event, highlighted, Modifier.weight(1f).clickable { onEditEvent(event) })
+            }
+        }
+        if (events.isNotEmpty()) item {
+            TextButton(onClick = onAddEvent, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp), tint = TapColors.timelineBlue)
+                Spacer(Modifier.width(7.dp))
+                Text("Add another plan", color = TapColors.timelineBlue)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlannerEventCard(event: PlannerEvent, highlighted: Boolean, modifier: Modifier = Modifier) {
+    val cardColor = if (highlighted) TapColors.timelineBlue else TapColors.eventPale
+    val mainColor = if (highlighted) Color.White else TapColors.ink
+    val subColor = if (highlighted) Color.White.copy(alpha = .86f) else TapColors.muted
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = cardColor),
+        shape = RoundedCornerShape(20.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 15.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(formatPlannerTime(event.minuteOfDay), modifier = Modifier.weight(1f), color = mainColor.copy(alpha = .9f), fontSize = 13.sp)
+                if (highlighted) Text("NOW", color = Color.White, fontSize = 10.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(5.dp))
+            Text(event.title, color = mainColor, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (event.note.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(event.note, color = subColor, fontSize = 13.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlannerEventDialog(
+    context: Context,
+    dateEpochDay: Long,
+    event: PlannerEvent?,
+    onDismiss: () -> Unit,
+    onSave: (PlannerEvent) -> Unit,
+    onDelete: (PlannerEvent) -> Unit
+) {
+    var title by remember(event?.id, dateEpochDay) { mutableStateOf(event?.title.orEmpty()) }
+    var note by remember(event?.id, dateEpochDay) { mutableStateOf(event?.note.orEmpty()) }
+    var minuteOfDay by remember(event?.id, dateEpochDay) { mutableIntStateOf(event?.minuteOfDay ?: 9 * 60) }
+    val date = LocalDate.ofEpochDay(dateEpochDay)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (event == null) "Add to your day" else "Edit plan", color = TapColors.ink) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(date.format(DateTimeFormatter.ofPattern("EEEE, MMMM d", Locale.getDefault())), color = TapColors.muted, fontSize = 13.sp)
+                OutlinedTextField(value = title, onValueChange = { title = it }, label = { Text("What's the plan?") }, singleLine = true)
+                OutlinedTextField(value = note, onValueChange = { note = it }, label = { Text("Add a short note") }, minLines = 2, maxLines = 3)
+                OutlinedButton(
+                    onClick = {
+                        TimePickerDialog(
+                            context,
+                            { _, hour, minute -> minuteOfDay = hour * 60 + minute },
+                            minuteOfDay / 60,
+                            minuteOfDay % 60,
+                            DateFormat.is24HourFormat(context)
+                        ).show()
+                    },
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Icon(Icons.Default.Timer, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(formatPlannerTime(minuteOfDay))
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (title.isNotBlank()) onSave(
+                        PlannerEvent(event?.id ?: UUID.randomUUID().toString(), dateEpochDay, minuteOfDay, title.trim(), note.trim())
+                    )
+                },
+                enabled = title.isNotBlank()
+            ) { Text("Save", color = TapColors.green) }
+        },
+        dismissButton = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (event != null) TextButton(onClick = { onDelete(event) }) { Text("Delete", color = TapColors.warningInk) }
+                TextButton(onClick = onDismiss) { Text("Cancel", color = TapColors.muted) }
+            }
+        },
+        containerColor = Color.White,
+        shape = RoundedCornerShape(24.dp)
+    )
+}
+
+private fun formatPlannerTime(minuteOfDay: Int): String {
+    val time = java.time.LocalTime.of(minuteOfDay / 60, minuteOfDay % 60)
+    return time.format(DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault()))
+}
+
+@Composable
+private fun FocusScreen(
     context: Context,
     store: LockStore,
     hasNfc: Boolean,
